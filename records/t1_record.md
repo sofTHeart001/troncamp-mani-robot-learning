@@ -1,19 +1,19 @@
-# T1 Record
+# T1 训练与提交记录
 
-This repository records a local TronCamp Mani T1 ACT baseline run.
+这是一次 TronCamp Mani T1 `adjust_bottle` 任务的 ACT baseline 记录。
 
-## Task
+## 任务信息
 
-- Track: T1
-- Task: adjust_bottle
-- Dataset: 200 local demonstrations
-- Policy: ACT
-- Training seed: 0
-- Best validation loss: 0.028757 at epoch 5125
+- 赛道：T1
+- 任务：`adjust_bottle`
+- 策略：ACT
+- 本地演示数据：200 episodes
+- 训练 seed：0
+- 最佳验证损失：0.028757，出现在 epoch 5125
 
-## Local Evaluation
+## 本地公开 seed 评估
 
-Evaluation used the official local evaluation entrypoint on the public 100-seed table.
+评估使用官方本地评估入口，在公开 100 seed 上执行，`repeats=1`。
 
 ```json
 {
@@ -25,17 +25,29 @@ Evaluation used the official local evaluation entrypoint on the public 100-seed 
 }
 ```
 
-## Submission
+结论：当前 checkpoint 可以跑通完整提交流程，但 `sr = 0.52` 只是边缘过线水平，后续仍需要继续优化数据、训练 seed 和 checkpoint 选择。
 
-- Track: T1
-- Checkpoint submitted: `policy_best.ckpt`
-- Official queue id: `#70`
-- Submission time: 2026-07-08
+## 官方提交
 
-Large generated artifacts are intentionally not included in this repository:
+- 提交赛道：T1
+- 提交 checkpoint：`policy_best.ckpt`
+- 官方队列编号：`#70`
+- 提交日期：2026-07-08
 
-- collected demonstrations
-- processed training data
-- ACT checkpoints
-- local evaluation logs
-- submission tokens or credentials
+## 后续计划
+
+- 对比不同 epoch checkpoint 的 rollout 成功率，而不是只看 validation loss。
+- 用不同训练 seed 重训，估计模型稳定性。
+- 增加成功/失败 rollout 视频，做动作偏差分析。
+- 增加数据量和数据覆盖度，观察成功率变化。
+- 将流程迁移到 T2/T3 任务。
+
+## 未公开的本地文件
+
+以下内容没有放入 GitHub：
+
+- 采集到的 `.hdf5` 演示数据
+- ACT processed data
+- `.ckpt` checkpoint
+- 本地日志
+- 官方提交 token 或其他凭据

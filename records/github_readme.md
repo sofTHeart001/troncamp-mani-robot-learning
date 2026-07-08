@@ -1,36 +1,13 @@
-# LIMX VLA TronCamp Record
+# GitHub 首页说明
 
-This repository is a public record of a TronCamp Mani T1 ACT baseline run.
+仓库首页使用中文项目展示版 README，面向面试和项目复盘。
 
-It keeps the project scripts, configuration notes, and evaluation records, while excluding
-large generated artifacts such as collected demonstrations, processed training data,
-checkpoints, local logs, and credentials.
+核心信息：
 
-## T1 Result
+- 任务：TronCamp Mani T1 `adjust_bottle`
+- 方法：ACT imitation learning
+- 本地公开 seed 评估：`sr = 0.52`
+- 官方提交队列编号：`#70`
+- 视频展示：`media/t1_collect_demo_episode43.gif`
 
-- Track: T1
-- Task: `adjust_bottle`
-- Policy: ACT
-- Demonstrations: 200 local episodes
-- Public-seed local evaluation: `sr = 0.52`
-- Episodes: 100
-- Repeats: 1
-- Official submission queue id: `#70`
-
-See [records/t1_record.md](records/t1_record.md) for the detailed record.
-
-## What Is Not Included
-
-The following files are intentionally excluded:
-
-- `external/robotwin_local/`
-- collected `.hdf5` demonstrations
-- `processed_data/`
-- ACT `.ckpt` checkpoints
-- local evaluation logs
-- submission tokens or other credentials
-
-## Notes
-
-This is a record repository, not a full clone-and-run release. The local training run used
-the TronCamp Mani starter package with RoboTwin installed under `external/robotwin_local`.
+该仓库不包含训练数据、checkpoint、processed data、日志和 token。
