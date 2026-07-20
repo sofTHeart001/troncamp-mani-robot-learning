@@ -360,8 +360,8 @@ make train-interact TRACK=T2 SEED=0 GPU=0
 
 ```bash
 cd external/robotwin_local/policy/inter-act
-bash process_data.sh grab_roller grab_roller_400ep 400
-bash train.sh grab_roller grab_roller_400ep 400 0 0
+bash process_data.sh grab_roller grab_roller_600ep 600
+bash train.sh grab_roller grab_roller_600ep 600 0 0
 ```
 
 训练输出：

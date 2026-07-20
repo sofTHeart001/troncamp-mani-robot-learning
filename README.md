@@ -11,7 +11,7 @@ Built on RoboTwin bimanual simulation, this project covers expert trajectory col
 ![RoboTwin](https://img.shields.io/badge/Simulation-RoboTwin-2F855A)
 ![CUDA](https://img.shields.io/badge/GPU-CUDA-76B900?logo=nvidia&logoColor=white)
 
-[视频展示](#视频展示) · [InterACT 改造](#interact-算法改造) · [复现指南](docs/reproduce.md) · [详细记录](records)
+[完整演示视频](media/troncamp_mani_final_demo_iaKZ-w.mp4) · [视频展示](#视频展示) · [InterACT 改造](#interact-算法改造) · [复现指南](docs/reproduce.md) · [详细记录](records)
 
 </div>
 
@@ -22,31 +22,40 @@ Built on RoboTwin bimanual simulation, this project covers expert trajectory col
 当前已经完成：
 
 - T1 `adjust_bottle`：数据采集、ACT 训练、本地评估、策略部署演示和官方提交。
-- T2 `grab_roller`：400 条成功轨迹采集、ACT + 轻量视觉增强训练、本地公开 seed 评估和最新权重提交。
+- T2 `grab_roller`：600 条成功轨迹采集、ACT + 轻量视觉增强训练、本地公开 seed 评估和官方提交。
 - T3 `stack_bowls_two`：600 条成功轨迹采集、ACT 训练和公开 seed 全量评估。
-- InterACT：在 ACT baseline 旁新增独立算法目录，用于后续 T4 双臂长序列任务验证。
+- T4 `stack_bowls_three`：600 条成功轨迹采集、ACT 快速训练、策略 rollout 演示和官方提交。
+- InterACT：在 ACT baseline 旁新增独立算法目录，用于后续复杂双臂长序列任务验证。
 
 ## 视频展示
 
+完整 2 分钟项目讲解与演示视频：[`media/troncamp_mani_final_demo_iaKZ-w.mp4`](media/troncamp_mani_final_demo_iaKZ-w.mp4)
+
 <table>
   <tr>
-    <td width="33%" align="center">
+    <td width="25%" align="center">
       <h3>T1：ACT 策略闭环执行</h3>
       <img src="media/t1_policy_rollout_success_seed_20260631.gif" width="300" alt="T1 policy rollout success" />
       <br />
       <a href="media/t1_policy_rollout_success_seed_20260631.mp4">查看原始 MP4</a>
     </td>
-    <td width="33%" align="center">
+    <td width="25%" align="center">
       <h3>T2：ACT 策略抓举滚筒</h3>
       <img src="media/t2_policy_rollout_success_seed_20260630.gif" width="300" alt="T2 policy rollout success" />
       <br />
       <a href="media/t2_policy_rollout_success_seed_20260630.mp4">查看原始 MP4</a>
     </td>
-    <td width="33%" align="center">
+    <td width="25%" align="center">
       <h3>T3：ACT 策略叠两碗</h3>
       <img src="media/t3_policy_rollout_success_seed_20260629.gif" width="300" alt="T3 policy rollout success" />
       <br />
       <a href="media/t3_policy_rollout_success_seed_20260629.mp4">查看原始 MP4</a>
+    </td>
+    <td width="25%" align="center">
+      <h3>T4：ACT 策略叠三碗</h3>
+      <img src="media/t4_policy_rollout_seed_20260629.gif" width="300" alt="T4 policy rollout" />
+      <br />
+      <a href="media/t4_policy_rollout_seed_20260629.mp4">查看原始 MP4</a>
     </td>
   </tr>
 </table>
@@ -56,16 +65,16 @@ Built on RoboTwin bimanual simulation, this project covers expert trajectory col
 | 阶段 | 任务 | 当前状态 |
 |---|---|---|
 | T1 | `adjust_bottle` | 已完成数据采集、ACT 训练、本地评估、策略部署演示和官方提交 |
-| T2 | `grab_roller` | 400 条轨迹，增强训练版 ACT 本地公开 seed `64%`，最新权重已提交官方队列 |
+| T2 | `grab_roller` | 600 条轨迹，增强训练版 ACT 完成训练与官方提交 |
 | T3 | `stack_bowls_two` | 600 条轨迹，ACT 本地公开 seed `72%` |
-| T4 | `stack_bowls_three` | 准备中，后续作为综合任务重点验证 |
+| T4 | `stack_bowls_three` | 600 条轨迹，ACT 快速训练完成，最佳验证损失 `0.036161 @ epoch 1100`，官方提交 `#695` |
 
 ## 项目亮点
 
 | 方向 | 内容 |
 |---|---|
 | 完整流程 | 打通 RoboTwin 任务配置、专家轨迹采集、ACT 数据处理、训练、评估和展示 |
-| 双臂任务 | 从 T1 单任务流程推进到 T2 抓举滚筒和 T3 双碗堆叠 |
+| 双臂任务 | 从 T1 单任务流程推进到 T2 抓举滚筒、T3 双碗堆叠和 T4 三碗堆叠 |
 | 算法扩展 | 新增 `policies/inter-act/`，保留 ACT baseline，同时准备 InterACT 风格结构 |
 | 工程整理 | 训练产物、checkpoint、HDF5 数据和 token 不入库，GitHub 保留可展示代码和记录 |
 | 可复现性 | 提供从环境安装到训练评估的 [复现指南](docs/reproduce.md) |
@@ -218,6 +227,15 @@ python starter/eval_local.py --track T3 \
   --deploy-config policy/ACT/deploy_t3.yml
 ```
 
+T4 使用：
+
+```bash
+make collect TRACK=T4 GPU=0
+PROCESS_RESUME=1 PROCESS_DELETE_SOURCE=1 make process TRACK=T4
+make train TRACK=T4 SEED=0 GPU=0
+TRONCAMP_TOKEN_FILE=/path/to/token.txt make submit TRACK=T4
+```
+
 ## 仓库结构
 
 ```text
@@ -225,6 +243,7 @@ records/
   t1_record.md             # T1 阶段记录
   t2_record.md             # T2 阶段记录
   t3_record.md             # T3 阶段记录
+  t4_record.md             # T4 阶段记录
   t1_public_eval.json      # T1 本地评估结果归档
   t2_public_eval.json      # T2 最新本地评估结果归档
   t3_public_eval.json      # T3 本地评估结果归档
@@ -235,6 +254,9 @@ media/
   t2_policy_rollout_success_seed_20260630.mp4
   t3_policy_rollout_success_seed_20260629.gif
   t3_policy_rollout_success_seed_20260629.mp4
+  t4_policy_rollout_seed_20260629.gif
+  t4_policy_rollout_seed_20260629.mp4
+  troncamp_mani_final_demo_iaKZ-w.mp4
 policies/
   inter-act/               # 独立 InterACT 风格算法改造
 docs/
@@ -261,7 +283,7 @@ submit/                    # 官方提交脚本
 
 ## 后续计划
 
-- 补充 T2/T3 policy rollout 视频。
-- 推进 T4 长序列双臂协同任务。
-- 对比 ACT、ACT + 数据增强、InterACT 三组策略。
-- 继续整理可展示的视频、训练记录和阶段成果。
+- 继续整理 T1-T4 训练曲线、提交结果和失败案例复盘。
+- 在更长序列任务上对比 ACT、ACT + 数据增强、InterACT 三组策略。
+- 验证更强视觉编码器、temporal aggregation 和更稳定的 checkpoint 选择策略。
+- 将当前脚本沉淀为更干净的一键实验入口。

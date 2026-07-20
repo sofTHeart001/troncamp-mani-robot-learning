@@ -66,9 +66,9 @@ set_track_vars() {
     T2|t2)
       TRACK="T2"
       TASK_NAME="grab_roller"
-      TASK_CONFIG="grab_roller_400ep"
+      TASK_CONFIG="grab_roller_600ep"
       CLEAN_CONFIG="grab_roller_clean"
-      EXPERT_DATA_NUM="400"
+      EXPERT_DATA_NUM="600"
       ;;
     T3|t3)
       TRACK="T3"
@@ -80,9 +80,9 @@ set_track_vars() {
     T4|t4)
       TRACK="T4"
       TASK_NAME="stack_bowls_three"
-      TASK_CONFIG="stack_bowls_three_200ep"
+      TASK_CONFIG="stack_bowls_three_600fast"
       CLEAN_CONFIG="stack_bowls_three_clean"
-      EXPERT_DATA_NUM="200"
+      EXPERT_DATA_NUM="600"
       ;;
     *)
       die "未知赛道: ${1:-空}，可选 T1/T2/T3/T4"

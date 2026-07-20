@@ -7,12 +7,15 @@
 - 赛道：T2
 - 任务：`grab_roller`
 - 策略：ACT baseline，后续准备对比 InterACT
-- 本地演示数据：400 episodes
-- baseline 训练 seed：0
-- 增强训练 seed：1
-- 训练配置：`chunk_size=50`、`hidden_dim=512`、`dim_feedforward=3200`、`kl_weight=10`、`lr=1e-5`
-- baseline 最佳验证损失：0.029596，出现在 epoch 2457
-- 增强训练最佳验证损失：0.029514，出现在 epoch 2514
+- 最终本地演示数据：600 episodes
+- 训练 seed：0
+- 最终训练配置：`chunk_size=100`、`hidden_dim=512`、`dim_feedforward=3200`、`kl_weight=10`
+- 优化配置：`batch_size=24`、`lr=2e-5`、`lr_backbone=3e-6`、`weight_decay=1e-4`
+- 训练技巧：`warmup_steps=500`、`grad_clip=0.1`、`val_ratio=0.1`、`ACT_AUG=1`
+- 最终训练轮数：4000 epochs
+- 最终最佳验证损失：0.015306，出现在 epoch 3666
+
+项目中也保留了一版 400 episodes 的早期实验记录，用于对比数据量、增强训练和 checkpoint 选择对 T2 的影响。
 
 ## Baseline 本地公开 seed 评估
 
@@ -30,7 +33,7 @@
 
 ## 最新 checkpoint 本地公开 seed 评估
 
-最新选择的是增强训练目录下的 `policy_last.ckpt`。在公开 100 seed 上，本地评估结果为：
+早期增强训练目录下的 `policy_last.ckpt` 在公开 100 seed 上，本地评估结果为：
 
 ```json
 {
@@ -42,9 +45,9 @@
 }
 ```
 
-该 checkpoint 已在 2026-07-15 作为 T2 最新版本提交官方队列，提交编号 `#380`。公开仓库只记录结果和复现方式，不提交 `.ckpt` 权重文件。
+后续又扩展到 600 条轨迹，并使用和 T3/T4 一致的 `chunk_size=100` 训练配置。公开仓库只记录结果和复现方式，不提交 `.ckpt` 权重文件。
 
-结论：400 条轨迹训练出的 ACT 已经具备完成 T2 双臂抓举任务的能力。轻量视觉增强和 checkpoint 筛选对公开 seed 稳定性有明显帮助。
+结论：T2 对 seed 和部署配置比较敏感。扩展轨迹数量、开启轻量视觉增强、保证提交端 deploy 配置与训练结构一致，是这一阶段最关键的工程经验。
 
 ## T2 Policy 自主执行示例
 
@@ -58,13 +61,13 @@
 
 ## 当前优化
 
-当前追加了一轮轻量视觉增强训练，用于提升模型对光照和背景变化的适应能力：
+当前最终版本使用 600 条轨迹和轻量视觉增强训练，用于提升模型对光照和背景变化的适应能力：
 
 - 只对 train dataset 做亮度、对比度、饱和度扰动。
 - validation dataset 保持干净，避免 best checkpoint 选择被随机增强噪声污染。
 - 不把 checkpoint、processed data 或训练日志放入 GitHub。
 
-下一步会继续对比增强训练、更多演示轨迹和 InterACT 结构在 T2/T3/T4 上的表现。
+下一步会继续对比更多演示轨迹、temporal aggregation 和 InterACT 结构在更长序列任务上的表现。
 
 ## 未公开的本地文件
 

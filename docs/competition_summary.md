@@ -27,8 +27,7 @@
 
 ## 注意事项
 
-- T2-T4 的 `<task>_200ep.yml` 需要自己从 `adjust_bottle_200ep.yml` 复制后调整。
+- T2-T4 的采集配置需要按任务单独准备；本项目最终使用 `grab_roller_600ep.yml`、`stack_bowls_two_600ep.yml` 和 `stack_bowls_three_600fast.yml`。
 - 采集、训练、评测依赖可用 NVIDIA 驱动和 CUDA 12.x。
 - `__KIT_ROOT__` 占位符必须在根目录还原，否则 cuRobo 规划器会失败。
 - 官方评测只加载提交的 ckpt、`policy/ACT` 代码和推理配置，不加载 `envs/` 专家。
-
