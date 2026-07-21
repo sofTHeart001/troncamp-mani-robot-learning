@@ -5,13 +5,39 @@ import cv2
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
-import torchvision.transforms as T
 
 # T2/T4 image augmentation, gated by env ACT_AUG=1 (T1/T3 leave it off). Color jitter targets
 # demo_randomized's random_light / background distribution shift -- matches the T2 hint menu.
 # Applied per camera on the [0,1] float image; qpos/action are untouched.
 _ACT_AUG = os.environ.get("ACT_AUG", "0") == "1"
-_AUG_TF = T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05) if _ACT_AUG else None
+_ACT_NUM_WORKERS = int(os.environ.get("ACT_NUM_WORKERS", "2"))
+_ACT_PREFETCH_FACTOR = int(os.environ.get("ACT_PREFETCH_FACTOR", "4"))
+
+
+def _apply_fast_color_aug(image_data):
+    if not _ACT_AUG:
+        return image_data
+
+    n_cams = image_data.shape[0]
+    shape = (n_cams, 1, 1, 1)
+    dtype = image_data.dtype
+    device = image_data.device
+
+    brightness = torch.empty(shape, dtype=dtype, device=device).uniform_(0.75, 1.25)
+    contrast = torch.empty(shape, dtype=dtype, device=device).uniform_(0.75, 1.25)
+    saturation = torch.empty(shape, dtype=dtype, device=device).uniform_(0.80, 1.20)
+
+    out = image_data * brightness
+    mean = out.mean(dim=(-2, -1), keepdim=True)
+    out = (out - mean) * contrast + mean
+    gray = (
+        out[:, 0:1] * 0.2989
+        + out[:, 1:2] * 0.5870
+        + out[:, 2:3] * 0.1140
+    )
+    out = (out - gray) * saturation + gray
+    return out.clamp_(0.0, 1.0)
+
 
 import IPython
 
@@ -20,13 +46,14 @@ e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
 
-    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, max_action_len):
+    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, max_action_len, augment=False):
         super(EpisodicDataset).__init__()
         self.episode_ids = episode_ids
         self.dataset_dir = dataset_dir
         self.camera_names = camera_names
         self.norm_stats = norm_stats
         self.max_action_len = max_action_len
+        self.augment = augment
         self.is_sim = None
         self.__getitem__(0)  # initialize self.is_sim
 
@@ -85,9 +112,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
         # normalize image and change dtype to float
         image_data = image_data / 255.0
-        if _AUG_TF is not None:
-            # per-camera color jitter (T2/T4); independent random params per view
-            image_data = torch.stack([_AUG_TF(image_data[k]) for k in range(image_data.shape[0])])
+        if self.augment:
+            image_data = _apply_fast_color_aug(image_data)
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
@@ -151,10 +177,11 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats, max_action_len
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, distributed=False):
+def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, distributed=False, val_ratio=0.2):
     print(f"\nData from: {dataset_dir}\n")
     # obtain train test split
-    train_ratio = 0.8
+    val_ratio = float(np.clip(val_ratio, 0.01, 0.5))
+    train_ratio = 1.0 - val_ratio
     shuffled_indices = np.random.permutation(num_episodes)
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
@@ -163,29 +190,33 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
     norm_stats, max_action_len = get_norm_stats(dataset_dir, num_episodes)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, max_action_len)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, max_action_len)
+    train_dataset = EpisodicDataset(
+        train_indices, dataset_dir, camera_names, norm_stats, max_action_len, augment=_ACT_AUG)
+    val_dataset = EpisodicDataset(
+        val_indices, dataset_dir, camera_names, norm_stats, max_action_len, augment=False)
     # Under DDP each rank gets a disjoint shard via DistributedSampler (which owns the shuffling) --
     # this is what makes N ranks ~Nx throughput. Non-distributed keeps plain shuffle=True.
     train_sampler = DistributedSampler(train_dataset, shuffle=True) if distributed else None
+    loader_kwargs = {
+        "pin_memory": True,
+        "num_workers": _ACT_NUM_WORKERS,
+    }
+    if _ACT_NUM_WORKERS > 0:
+        loader_kwargs["prefetch_factor"] = _ACT_PREFETCH_FACTOR
+        loader_kwargs["persistent_workers"] = True
+
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size_train,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        pin_memory=True,
-        num_workers=2,
-        prefetch_factor=4,
-        persistent_workers=True,
+        **loader_kwargs,
     )
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=batch_size_val,
         shuffle=True,
-        pin_memory=True,
-        num_workers=2,
-        prefetch_factor=4,
-        persistent_workers=True,
+        **loader_kwargs,
     )
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim

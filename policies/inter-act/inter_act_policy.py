@@ -27,6 +27,8 @@ class InterACTPolicy(nn.Module):
         model, optimizer = build_INTERACT_model_and_optimizer(args_override, RoboTwin_Config)
         self.model = model
         self.optimizer = optimizer
+        self.kl_weight = float(args_override.get("kl_weight", 10.0))
+        print(f"InterACT CVAE KL Weight {self.kl_weight}")
 
     def __call__(self, qpos, image, actions=None, is_pad=None):
         env_state = None
@@ -36,23 +38,43 @@ class InterACTPolicy(nn.Module):
         if actions is not None:
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
-            a_hat, _is_pad_hat = self.model(qpos, image, env_state, actions, is_pad)
-            valid = ~is_pad.unsqueeze(-1)
+            a_hat, _is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
+            valid = (~is_pad.unsqueeze(-1)).to(dtype=actions.dtype)
             all_l1 = F.l1_loss(actions, a_hat, reduction="none")
             all_l2 = F.mse_loss(actions, a_hat, reduction="none")
             l1 = (all_l1 * valid).mean()
             l2 = (all_l2 * valid).mean()
+            kl = actions.new_zeros(())
+            if mu is not None and logvar is not None:
+                total_kld, _dim_wise_kld, _mean_kld = kl_divergence(mu, logvar)
+                kl = total_kld[0]
             return {
                 "l1": l1,
                 "l2": l2,
-                "loss": l1,
+                "kl": kl,
+                "loss": l1 + kl * self.kl_weight,
             }
 
-        a_hat, _is_pad_hat = self.model(qpos, image, env_state)
+        a_hat, _is_pad_hat, (_mu, _logvar) = self.model(qpos, image, env_state)
         return a_hat
 
     def configure_optimizers(self):
         return self.optimizer
+
+
+def kl_divergence(mu, logvar):
+    batch_size = mu.size(0)
+    assert batch_size != 0
+    if mu.data.ndimension() == 4:
+        mu = mu.view(mu.size(0), mu.size(1))
+    if logvar.data.ndimension() == 4:
+        logvar = logvar.view(logvar.size(0), logvar.size(1))
+
+    klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+    total_kld = klds.sum(1).mean(0, True)
+    dimension_wise_kld = klds.mean(0)
+    mean_kld = klds.mean(1).mean(0, True)
+    return total_kld, dimension_wise_kld, mean_kld
 
 
 class InterACT:

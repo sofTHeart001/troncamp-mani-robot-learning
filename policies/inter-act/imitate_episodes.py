@@ -81,12 +81,12 @@ def main(args):
 
     # fixed parameters
     state_dim = 16  # yiheng (Tron2 16-D)
-    lr_backbone = 1e-5
+    lr_backbone = args.get("lr_backbone", 1e-5)
     backbone = "resnet18"
     if policy_class in ("ACT", "InterACT"):
         enc_layers = 4
         dec_layers = 7
-        nheads = 8
+        nheads = args["nheads"]
         policy_config = {
             "lr": args["lr"],
             "chunk_size": args["chunk_size"],
@@ -100,10 +100,14 @@ def main(args):
             "enc_layers": enc_layers,
             "dec_layers": dec_layers,
             "nheads": nheads,
+            "dropout": args["dropout"],
             "camera_names": camera_names,
         }
         if policy_class == "InterACT":
             policy_config.update({
+                "use_cvae": bool(args["use_cvae"]),
+                "latent_dim": args["latent_dim"],
+                "cvae_encoder_layers": args["cvae_encoder_layers"],
                 "num_blocks": args["num_blocks"],
                 "num_cls_tokens_arm": args["num_cls_tokens_arm"],
                 "num_cls_tokens_image": args["num_cls_tokens_image"],
@@ -137,6 +141,8 @@ def main(args):
         "camera_names": camera_names,
         "real_robot": not is_sim,
         "save_freq": args['save_freq'],
+        "warmup_steps": args["warmup_steps"],
+        "grad_clip": args["grad_clip"],
         "ddp": ddp,
         "local_rank": local_rank,
         "is_main": is_main,
@@ -155,7 +161,8 @@ def main(args):
         exit()
 
     train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train,
-                                                           batch_size_val, distributed=ddp)
+                                                           batch_size_val, distributed=ddp,
+                                                           val_ratio=args["val_ratio"])
 
     # save dataset stats (rank 0 only under DDP)
     if is_main:
@@ -411,6 +418,11 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy = make_policy(policy_class, policy_config)
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
+    for group in optimizer.param_groups:
+        group.setdefault("initial_lr", group["lr"])
+    warmup_steps = int(config.get("warmup_steps", 0) or 0)
+    grad_clip = float(config.get("grad_clip", 0) or 0)
+    global_step = 0
 
     # Multi-GPU via DDP under torchrun: each rank owns one GPU, the train sampler shards the data
     # (set in load_data) and gradients are all-reduced -> real ~Nx throughput. Optimizer is built on
@@ -463,8 +475,18 @@ def train_bc(train_dataloader, val_dataloader, config):
             # backward (DP gathers per-GPU scalars into a vector -> reduce to scalar)
             loss = forward_dict["loss"].mean()
             loss.backward()
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(policy.parameters(), grad_clip)
+            if warmup_steps > 0 and global_step < warmup_steps:
+                lr_scale = float(global_step + 1) / float(warmup_steps)
+                for group in optimizer.param_groups:
+                    group["lr"] = group["initial_lr"] * lr_scale
             optimizer.step()
             optimizer.zero_grad()
+            if warmup_steps > 0 and global_step + 1 == warmup_steps:
+                for group in optimizer.param_groups:
+                    group["lr"] = group["initial_lr"]
+            global_step += 1
             train_history.append(detach_dict(forward_dict))
         epoch_summary = compute_dict_mean(train_history[(batch_idx + 1) * epoch:(batch_idx + 1) * (epoch + 1)])
         epoch_train_loss = epoch_summary["loss"]
@@ -536,11 +558,17 @@ if __name__ == "__main__":
     parser.add_argument("--seed", action="store", type=int, help="seed", required=True)
     parser.add_argument("--num_epochs", action="store", type=int, help="num_epochs", required=True)
     parser.add_argument("--lr", action="store", type=float, help="lr", required=True)
+    parser.add_argument("--lr_backbone", action="store", type=float, help="backbone lr", required=False, default=1e-5)
 
     # for ACT
-    parser.add_argument("--kl_weight", action="store", type=int, help="KL Weight", required=False)
+    parser.add_argument("--kl_weight", action="store", type=float, help="KL Weight", required=False)
     parser.add_argument("--chunk_size", action="store", type=int, help="chunk_size", required=False)
     parser.add_argument("--hidden_dim", action="store", type=int, help="hidden_dim", required=False)
+    parser.add_argument("--nheads", action="store", type=int, help="attention heads", required=False, default=8)
+    parser.add_argument("--dropout", action="store", type=float, help="transformer dropout", required=False, default=0.1)
+    parser.add_argument("--warmup_steps", action="store", type=int, help="linear LR warmup steps", default=0)
+    parser.add_argument("--grad_clip", action="store", type=float, help="max grad norm; <=0 disables clipping", default=0.0)
+    parser.add_argument("--val_ratio", action="store", type=float, help="trajectory-level validation ratio", default=0.2)
     parser.add_argument("--state_dim", action="store", type=int, help="state dim", required=True)
     parser.add_argument("--save_freq", action="store", type=int, help="save ckpt frequency", required=False, default=6000)
     parser.add_argument(
@@ -551,9 +579,12 @@ if __name__ == "__main__":
         required=False,
     )
     parser.add_argument("--temporal_agg", action="store_true")
+    parser.add_argument("--use_cvae", action="store", type=int, help="Enable InterACT CVAE branch: 1/0", default=1)
     parser.add_argument("--num_blocks", action="store", type=int, help="InterACT hierarchical encoder blocks", default=3)
-    parser.add_argument("--num_cls_tokens_arm", action="store", type=int, help="InterACT CLS tokens per arm", default=3)
-    parser.add_argument("--num_cls_tokens_image", action="store", type=int, help="InterACT CLS tokens for image segment", default=3)
+    parser.add_argument("--latent_dim", action="store", type=int, help="InterACT CVAE latent dimension", default=32)
+    parser.add_argument("--cvae_encoder_layers", action="store", type=int, help="InterACT CVAE posterior encoder layers", default=4)
+    parser.add_argument("--num_cls_tokens_arm", action="store", type=int, help="InterACT CLS tokens per arm", default=7)
+    parser.add_argument("--num_cls_tokens_image", action="store", type=int, help="InterACT CLS tokens for image segment", default=5)
     parser.add_argument("--n_pre_decoder_layers", action="store", type=int, help="InterACT pre-sync decoder layers", default=2)
     parser.add_argument("--n_post_decoder_layers", action="store", type=int, help="InterACT post-sync decoder layers", default=2)
     parser.add_argument("--n_sync_decoder_layers", action="store", type=int, help="InterACT sync self-attention layers", default=1)

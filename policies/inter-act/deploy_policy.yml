@@ -32,8 +32,8 @@ nheads: 8
 enc_layers: 4
 dec_layers: 7
 num_blocks: 3
-num_cls_tokens_arm: 3
-num_cls_tokens_image: 3
+num_cls_tokens_arm: 7
+num_cls_tokens_image: 5
 n_pre_decoder_layers: 2
 n_post_decoder_layers: 2
 n_sync_decoder_layers: 1

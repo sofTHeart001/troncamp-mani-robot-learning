@@ -50,6 +50,12 @@ def get_activation_fn(activation):
     raise RuntimeError(f"activation should be relu/gelu/glu, not {activation}.")
 
 
+def reparametrize(mu, logvar):
+    std = torch.exp(0.5 * logvar)
+    eps = torch.randn_like(std)
+    return mu + eps * std
+
+
 class InterACTEncoderLayer(nn.Module):
     def __init__(self, hidden_dim, nheads, dim_feedforward, dropout=0.1, activation="relu", pre_norm=False):
         super().__init__()
@@ -139,6 +145,66 @@ class InterACTDecoderLayer(nn.Module):
         return x
 
 
+class CVAEActionEncoder(nn.Module):
+    """Posterior q(z | qpos, action chunk) used by ACT-style CVAE training."""
+
+    def __init__(self, args, state_dim, num_queries):
+        super().__init__()
+        hidden_dim = args.hidden_dim
+        nheads = args.nheads
+        dim_feedforward = args.dim_feedforward
+        dropout = _getattr(args, "dropout", 0.1)
+        activation = _getattr(args, "feedforward_activation", "relu")
+        pre_norm = _getattr(args, "pre_norm", False)
+        num_layers = _getattr(args, "cvae_encoder_layers", _getattr(args, "enc_layers", 4))
+
+        self.num_queries = num_queries
+        self.latent_dim = _getattr(args, "latent_dim", 32)
+        self.cls_embed = nn.Embedding(1, hidden_dim)
+        self.qpos_proj = nn.Linear(state_dim, hidden_dim)
+        self.action_proj = nn.Linear(state_dim, hidden_dim)
+        self.layers = nn.ModuleList([
+            InterACTEncoderLayer(hidden_dim, nheads, dim_feedforward, dropout, activation, pre_norm)
+            for _ in range(num_layers)
+        ])
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.latent_proj = nn.Linear(hidden_dim, self.latent_dim * 2)
+        self.register_buffer(
+            "pos_table",
+            create_sinusoidal_pos_embedding(2 + num_queries, hidden_dim),
+        )
+
+    def forward(self, qpos, actions, is_pad=None):
+        batch_size = qpos.shape[0]
+        actions = actions[:, :self.num_queries]
+        if is_pad is None:
+            is_pad = torch.zeros(batch_size, actions.shape[1], dtype=torch.bool, device=qpos.device)
+        else:
+            is_pad = is_pad[:, :actions.shape[1]].bool()
+
+        cls_token = self.cls_embed.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+        qpos_token = self.qpos_proj(qpos).unsqueeze(1)
+        action_tokens = self.action_proj(actions)
+        encoder_input = torch.cat([cls_token, qpos_token, action_tokens], dim=1).transpose(0, 1)
+
+        cls_qpos_pad = torch.zeros(batch_size, 2, dtype=torch.bool, device=qpos.device)
+        key_padding_mask = torch.cat([cls_qpos_pad, is_pad], dim=1)
+        pos = self.pos_table[:encoder_input.shape[0]].unsqueeze(1).to(
+            device=qpos.device,
+            dtype=encoder_input.dtype,
+        )
+
+        encoded = encoder_input
+        for layer in self.layers:
+            encoded = layer(encoded, pos_embed=pos, key_padding_mask=key_padding_mask)
+
+        cls_output = self.norm(encoded[0])
+        latent_info = self.latent_proj(cls_output)
+        mu = latent_info[:, :self.latent_dim]
+        logvar = latent_info[:, self.latent_dim:]
+        return mu, logvar
+
+
 class HierarchicalAttentionEncoder(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -160,8 +226,8 @@ class HierarchicalAttentionEncoder(nn.Module):
             for _ in range(num_blocks)
         ])
 
-        self.arm_cls = _getattr(args, "num_cls_tokens_arm", 3)
-        self.image_cls = _getattr(args, "num_cls_tokens_image", 3)
+        self.arm_cls = _getattr(args, "num_cls_tokens_arm", 7)
+        self.image_cls = _getattr(args, "num_cls_tokens_image", 5)
     def forward(self, left_segment, right_segment, image_segment, left_pos, right_pos, image_pos, cls_pos):
         left_segment = left_segment.transpose(0, 1)
         right_segment = right_segment.transpose(0, 1)
@@ -269,8 +335,10 @@ class InterACTModel(nn.Module):
         self.state_dim = state_dim
         self.arm_dim = state_dim // 2
         self.hidden_dim = args.hidden_dim
-        self.num_cls_tokens_arm = _getattr(args, "num_cls_tokens_arm", 3)
-        self.num_cls_tokens_image = _getattr(args, "num_cls_tokens_image", 3)
+        self.num_cls_tokens_arm = _getattr(args, "num_cls_tokens_arm", 7)
+        self.num_cls_tokens_image = _getattr(args, "num_cls_tokens_image", 5)
+        self.use_cvae = bool(_getattr(args, "use_cvae", True))
+        self.latent_dim = _getattr(args, "latent_dim", 32)
 
         self.backbones = nn.ModuleList(backbones)
         self.image_input_proj = nn.Conv2d(backbones[0].num_channels, self.hidden_dim, kernel_size=1)
@@ -301,6 +369,8 @@ class InterACTModel(nn.Module):
 
         self.encoder = HierarchicalAttentionEncoder(args)
         self.decoder = MultiArmDecoder(args)
+        self.action_encoder = CVAEActionEncoder(args, state_dim, num_queries) if self.use_cvae else None
+        self.latent_out_proj = nn.Linear(self.latent_dim, self.hidden_dim)
         self.decoder_pos_embed = nn.Embedding(num_queries, self.hidden_dim)
         self.left_action_head = nn.Linear(self.hidden_dim, self.arm_dim)
         self.right_action_head = nn.Linear(self.hidden_dim, self.arm_dim)
@@ -308,12 +378,16 @@ class InterACTModel(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        for p in list(self.encoder.parameters()) + list(self.decoder.parameters()):
+        params = list(self.encoder.parameters()) + list(self.decoder.parameters())
+        if self.action_encoder is not None:
+            params += list(self.action_encoder.parameters())
+        for p in params:
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
         for module in [
             self.joint_proj,
             self.image_input_proj,
+            self.latent_out_proj,
             self.left_action_head,
             self.right_action_head,
         ]:
@@ -353,6 +427,21 @@ class InterACTModel(nn.Module):
 
     def forward(self, qpos, image, env_state=None, actions=None, is_pad=None):
         batch_size = qpos.shape[0]
+        mu = logvar = None
+        latent_input = None
+        if self.use_cvae:
+            if actions is not None:
+                mu, logvar = self.action_encoder(qpos, actions, is_pad)
+                latent_sample = reparametrize(mu, logvar)
+            else:
+                latent_sample = torch.zeros(
+                    batch_size,
+                    self.latent_dim,
+                    dtype=qpos.dtype,
+                    device=qpos.device,
+                )
+            latent_input = self.latent_out_proj(latent_sample)
+
         left_qpos = qpos[:, :self.arm_dim]
         right_qpos = qpos[:, self.arm_dim:]
 
@@ -391,6 +480,8 @@ class InterACTModel(nn.Module):
             dtype=qpos.dtype,
             device=qpos.device,
         )
+        if latent_input is not None:
+            decoder_input = decoder_input + latent_input.unsqueeze(0)
         decoder_pos = self.decoder_pos_embed.weight.unsqueeze(1)
         left_decoded, right_decoded = self.decoder(
             decoder_input,
@@ -406,7 +497,7 @@ class InterACTModel(nn.Module):
         left_actions = self.left_action_head(left_decoded)
         right_actions = self.right_action_head(right_decoded)
         actions_hat = torch.cat([left_actions, right_actions], dim=-1)
-        return actions_hat, None
+        return actions_hat, None, (mu, logvar)
 
 
 def build(args):
